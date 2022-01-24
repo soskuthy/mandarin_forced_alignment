@@ -1,7 +1,7 @@
 ---
 title: "LING513_project_analysis"
-author: "Suyuan Liu"
-date: "12/6/2021"
+author: "Suyuan Liu, Márton Sóskuthy"
+date: "01/23/2022"
 output: html_document
 ---
 
@@ -19,6 +19,7 @@ manual <- read_csv("mandarin_manual_output.csv") %>%
   arrange(speaker, file, phone_start)
 
 range01 <- function(x){(x-min(x))/(max(x)-min(x))}
+source("levenshtein.r")
 ```
 
 ## Data cleaning
