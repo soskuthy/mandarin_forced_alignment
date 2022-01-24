@@ -52,7 +52,9 @@ df_overview <- df %>%
   group_by(res, speaker) %>%
   summarise(sd=sd(diff, na.rm=T),
             mean=mean(diff, na.rm=T),
-            median=median(diff, na.rm=T)) %>%
+            median=median(diff, na.rm=T),
+            under_20_ms=mean(diff < 0.02, na.rm=T),
+            over_100_ms=mean(diff > 0.1, na.rm=T)) %>%
   ungroup()
 ```
 
@@ -126,10 +128,43 @@ ggplot(df_sum, aes(x=res, y=percent, fill=speaker, alpha=speech_rate)) +
 
 
 ```{r}
+df$diff_log <- log(df$diff)
+df$speech_rate_log_s <- scale(log(df$speech_rate))
+
+library(optimx)
+
 # attempt to a linear mixed-effect model..?
-m <- lmer(diff ~ res + speech_rate + sex + age + 
-              (1 | speaker), 
-            data=df)
-summary(m)
+mod_ML <- lmer(diff_log ~ res + speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=F
+            )
+
+mod_ML_0 <- lmer(diff_log ~ speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=F
+            )
+
+mod_REML <- lmer(diff_log ~ res + speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=T
+            )
+
+mod_REML_0 <- lmer(diff_log ~ res + speech_rate_log_s +
+                     (0 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=T
+            )
+
+
+summary(mod_ML)
+anova(mod_ML, mod_ML_0, test="Chisq") # no significant overall effect of variety
+anova(mod_REML, mod_REML_0, test="Chisq", refit=F) # significant variation across participants
 ```
 
