@@ -23,7 +23,7 @@ levenshtein_align <- function (a, b) {
   n_c <- ncol(m)
   i <- n_r
   j <- n_c
-  align_out <- c()
+  align_out <- rep(NA, i-1)
   while (!(i==1 & j==1)) {
     cost <- m[i, j]
     # deletion

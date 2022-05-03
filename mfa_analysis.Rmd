@@ -1,0 +1,181 @@
+---
+title: "mfa_analysis"
+author: "Suyuan Liu, Márton Sóskuthy"
+date: "5/2/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(dplyr)
+library(reshape2)
+library(lmerTest)
+
+mfa <- read_csv("mandarin_mfa_output.csv") %>%
+  arrange(speaker, file, phone_start)
+manual <- read_csv("mandarin_manual_suyuan_output.csv") %>%
+  arrange(speaker, file, phone_start)
+
+range01 <- function(x){(x-min(x))/(max(x)-min(x))}
+source("levenshtein.r")
+```
+
+## Data cleaning
+
+```{r cars}
+## combine two datasets
+## we'll use alignment based on edit distance - so none of the indexing
+## magic is necessary!
+
+dfs <- list()
+
+for (spk in unique(mfa$speaker)) {
+  mfa_chunk <- filter(mfa, speaker==spk)
+  manual_chunk <- filter(manual, speaker==spk)
+  alignment <- levenshtein_align(mfa_chunk$phone, manual_chunk$phone)
+  mfa_chunk <- mfa_chunk %>%
+    mutate(
+      phone_start_mfa=phone_start,
+      phone_start_manual=manual_chunk$phone_start[alignment],
+      diff=abs(phone_start_mfa - phone_start_manual)
+    ) %>%
+    filter(!is.na(diff))
+  dfs[[length(dfs) + 1]] <- mfa_chunk
+}
+
+df <- bind_rows(dfs)
+
+# add in speaker information
+df <- df %>%
+    mutate(sex = case_when(speaker %in% c("ma_4336","ma_5530","ma_5542","ma_5716","ma_5779","ma_5800", "ma_5906","ma_5975") ~ "f",
+                        speaker %in% c("maa_4426","ma_5260","ma_5560","ma_5824")  ~ "m"),
+           res = case_when(speaker %in% c("ma_4336", "ma_5800") ~ "Canto",
+                           speaker %in% c("ma_5542", "ma_5824") ~ "Shanghai",
+                           speaker %in% c("ma_5560", "ma_5716") ~ "Beijing",
+                           speaker %in% c("ma_5975", "ma_5779") ~ "Tianjin",
+                           speaker %in% c("ma_4426", "ma_5530") ~ "Nanjing",
+                           speaker %in% c("ma_5260", "ma_5906") ~ "YunChuan"))
+```
+
+```{r}
+df_overview <- df %>%
+  group_by(res, speaker) %>%
+  summarise(sd=sd(diff, na.rm=T),
+            mean=mean(diff, na.rm=T),
+            median=median(diff, na.rm=T),
+            under_20_ms=mean(diff < 0.02, na.rm=T),
+            over_100_ms=mean(diff > 0.1, na.rm=T)) %>%
+  ungroup()
+```
+
+```{r}
+ggplot(df, aes(y=diff*1000, x=res, color=speaker)) +
+  #scale_color_manual(values = c("dodgerblue1", "darkgoldenrod2", 
+  #                              "coral1", "coral2",
+  #                              "dodgerblue2","darkgoldenrod2",
+  #                              "forestgreen")) +
+  geom_boxplot() +
+  scale_y_log10() +
+  theme_bw() + 
+  labs(x = "Variation of Mandarin\n", y = "Onset displacement (ms) \n") +
+  theme(legend.position = "none")
+```
+
+```{r}
+ggplot(df, aes(y=diff*1000, x=res, color=speaker)) +
+  #scale_color_manual(values = c("dodgerblue2", "darkgoldenrod2", 
+  #                              "coral2", "coral2",
+  #                              "dodgerblue2","darkgoldenrod2",
+  #                              "forestgreen")) +
+  coord_trans(y = 'log') +
+  scale_y_continuous(breaks=c(10,50, 100, 500, 1000, 2000, 3000)) +
+  # using violins to show distributions per vowel
+  geom_boxplot() +
+  # adding the median separately as a point
+  theme_bw() + 
+  labs(x = "Variation of Mandarin\n", y = "Onset displacement (ms) \n") +
+  theme(legend.position = "none")
+```
+
+```{r}
+# create a unique code for each speaker's production of each phone
+
+# create summary df to summarize the percent 
+# of misalignment that fall in 10ms or 20ms
+df_sum <- df %>%
+  group_by(speaker) %>%
+  summarise(n_phone=n(),
+            n_phone_10=sum(diff < 0.01),
+            n_phone_20=sum(diff < 0.02),
+            per_10=(n_phone_10/n_phone)*100,
+            per_20=(n_phone_20/n_phone)*100,
+            res=res,
+            speech_rate=mean(speech_rate)) %>%
+  ungroup() %>%
+  distinct() %>%
+  pivot_longer(cols=starts_with("per_"),
+               names_to = "range",
+               names_prefix = "per_",
+               values_to = "percent",
+               values_drop_na = TRUE)
+
+df_sum$speaker<-gsub("ma_","",as.character(df_sum$speaker))
+
+# plot the percentages
+ggplot(df_sum, aes(x=res, y=percent, fill=speaker, alpha=speech_rate)) + 
+  scale_alpha_continuous(range = c(0.35, 0.9)) +
+  #scale_fill_manual(values = c("dodgerblue1", "darkgoldenrod2", 
+  #                              "coral1", "coral2",
+  #                              "dodgerblue2","darkgoldenrod2",
+  #                              "forestgreen")) +
+  facet_grid(~range) +
+  theme_bw() + 
+  geom_bar(stat='identity', width = 0.8, position = position_dodge(width = 0.9)) +
+  labs(x = "Variation of Mandarin", y = "Percent of aligner boundaries \n within threshold of human placement") +
+  theme(legend.position = "none") +
+  coord_cartesian(ylim = c(0, 100))
+```
+
+
+```{r}
+df$diff_log <- log(df$diff)
+df$speech_rate_log_s <- scale(log(df$speech_rate))
+
+library(optimx)
+
+# attempt to a linear mixed-effect model..?
+mod_ML <- lmer(diff_log ~ res + speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=F
+            )
+
+mod_ML_0 <- lmer(diff_log ~ speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=F
+            )
+
+mod_REML <- lmer(diff_log ~ res + speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=T
+            )
+
+mod_REML_0 <- lmer(diff_log ~ res + speech_rate_log_s +
+                     (0 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=T
+            )
+
+
+summary(mod_ML)
+anova(mod_ML, mod_ML_0, test="Chisq") # no significant overall effect of variety
+anova(mod_REML, mod_REML_0, test="Chisq", refit=F) # significant variation across participants
+```
