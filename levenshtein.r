@@ -23,7 +23,7 @@ levenshtein_align <- function (a, b) {
   n_c <- ncol(m)
   i <- n_r
   j <- n_c
-  align_out <- list()
+  align_out <- c()
   while (!(i==1 & j==1)) {
     cost <- m[i, j]
     # deletion
@@ -45,7 +45,7 @@ levenshtein_align <- function (a, b) {
       diag <- cost + 1
     }
     if (diag == cost - 1) {
-      align_out[[j - 1]] = i - 1
+      align_out[i - 1] = j - 1
       i = i - 1
       j = j - 1
     } else if (left == cost - 1) {
@@ -53,11 +53,10 @@ levenshtein_align <- function (a, b) {
     } else if (up == cost - 1) {
       i = i - 1
     } else if (diag == cost) {
-      align_out[[j - 1]] = i - 1
+      align_out[i - 1] = j - 1
       i = i - 1
       j = j - 1
     }
-    cat(i, j, "\n", sep=" ")
   }
   return(align_out)
 }
