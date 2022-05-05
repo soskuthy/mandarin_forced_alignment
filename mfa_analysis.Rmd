@@ -17,6 +17,8 @@ mfa <- read_csv("mandarin_mfa_output.csv") %>%
   arrange(speaker, file, phone_start)
 manual <- read_csv("mandarin_manual_suyuan_output.csv") %>%
   arrange(speaker, file, phone_start)
+manual_sijia <- read_csv("mandarin_manual_sijia_output.csv") %>%
+  arrange(speaker, file, phone_start)
 
 range01 <- function(x){(x-min(x))/(max(x)-min(x))}
 source("levenshtein.r")
@@ -47,16 +49,31 @@ for (spk in unique(mfa$speaker)) {
 
 df <- bind_rows(dfs)
 
+df <- df[!grepl("[a-zA-Z]", df$word),]
+
 # add in speaker information
 df <- df %>%
     mutate(sex = case_when(speaker %in% c("ma_4336","ma_5530","ma_5542","ma_5716","ma_5779","ma_5800", "ma_5906","ma_5975") ~ "f",
-                        speaker %in% c("maa_4426","ma_5260","ma_5560","ma_5824")  ~ "m"),
+                           speaker %in% c("maa_4426","ma_5260","ma_5560","ma_5824")  ~ "m"),
            res = case_when(speaker %in% c("ma_4336", "ma_5800") ~ "Canto",
                            speaker %in% c("ma_5542", "ma_5824") ~ "Shanghai",
                            speaker %in% c("ma_5560", "ma_5716") ~ "Beijing",
                            speaker %in% c("ma_5975", "ma_5779") ~ "Tianjin",
                            speaker %in% c("ma_4426", "ma_5530") ~ "Nanjing",
-                           speaker %in% c("ma_5260", "ma_5906") ~ "YunChuan"))
+                           speaker %in% c("ma_5260", "ma_5906") ~ "Xinan"),
+           simple_phone = gsub("[0-9]", "", df$phone),
+           phone_category = case_when(simple_phone %in% c("a", "ai", "ao", 
+                                                   "e", "ei", "i", 
+                                                   "ia", "iao", "ie", "ii", "io", "iou", "iu", 
+                                                   "o", "ou", 
+                                                   "u", "ua", "uai", "ue", "uei", "uo", 
+                                                   "v", "va", "ve") ~ "vowel", #25
+                                      phone %in% c("b", "d", "g", "k", "p", "t") ~ "stop", #6
+                                      phone %in% c("c", "ch", "f", "h", "s", "sh", "x", "z", "zh", "q", "j") ~ "fricative", #9
+                                      phone %in% c("l", "r") ~ "approximant", #2
+                                      phone %in% c("m", "n", "ng") ~ "nasal", #3
+                                      )) 
+
 ```
 
 ```{r}
@@ -71,24 +88,32 @@ df_overview <- df %>%
 ```
 
 ```{r}
-ggplot(df, aes(y=diff*1000, x=res, color=speaker)) +
-  #scale_color_manual(values = c("dodgerblue1", "darkgoldenrod2", 
-  #                              "coral1", "coral2",
+p_log <- ggplot(df, aes(y=diff*1000, x=res, color=res, shade=speaker)) +
+  #scale_color_manual(values = c("dodgerblue2", "darkgoldenrod2", 
+  #                              "coral2", "coral2",
   #                              "dodgerblue2","darkgoldenrod2",
-  #                              "forestgreen")) +
+  #                              "seagreen", "seashell",
+  #                              "firebrick1", "firebrick4",
+  #                              "mediumorchid3", "mediumorchid4")) +
   geom_boxplot() +
   scale_y_log10() +
   theme_bw() + 
   labs(x = "Variation of Mandarin\n", y = "Onset displacement (ms) \n") +
   theme(legend.position = "none")
+
+ggsave(p_log, filename = "Mandarin_log.png",  width = 9, height = 5, bg = "transparent")
+
 ```
 
 ```{r}
-ggplot(df, aes(y=diff*1000, x=res, color=speaker)) +
+p_log_2 <- ggplot(df, aes(y=diff*1000, x=res, color=res, shade=speaker)) +
   #scale_color_manual(values = c("dodgerblue2", "darkgoldenrod2", 
   #                              "coral2", "coral2",
   #                              "dodgerblue2","darkgoldenrod2",
-  #                              "forestgreen")) +
+  #                              "seagreen", "seashell",
+  #                              "firebrick1", "firebrick4",
+  #                              "mediumorchid3", "mediumorchid4")) +
+  #facet_wrap(~phone_category) +
   coord_trans(y = 'log') +
   scale_y_continuous(breaks=c(10,50, 100, 500, 1000, 2000, 3000)) +
   # using violins to show distributions per vowel
@@ -96,7 +121,34 @@ ggplot(df, aes(y=diff*1000, x=res, color=speaker)) +
   # adding the median separately as a point
   theme_bw() + 
   labs(x = "Variation of Mandarin\n", y = "Onset displacement (ms) \n") +
-  theme(legend.position = "none")
+  theme(legend.position = "none") +
+  theme(text=element_text(size=14))
+
+ggsave(p_log_2, filename = "Mandarin_log_2.png",  width = 9, height = 5, bg = "transparent")
+
+```
+
+```{r consonant vs. vowel}
+p_c_v <- ggplot(df, aes(y=diff*1000, x=phone_category, color=phone_category)) +
+  #scale_color_manual(values = c("dodgerblue2", "darkgoldenrod2", 
+  #                              "coral2", "coral2",
+  #                              "dodgerblue2","darkgoldenrod2",
+  #                              "seagreen", "seashell",
+  #                              "firebrick1", "firebrick4",
+  #                              "mediumorchid3", "mediumorchid4")) +
+  #facet_wrap(~phone_category) +
+  coord_trans(y = 'log') +
+  scale_y_continuous(breaks=c(10,50, 100, 500, 1000, 2000, 3000)) +
+  # using violins to show distributions per vowel
+  geom_boxplot() +
+  # adding the median separately as a point
+  theme_bw() + 
+  labs(x = "Variation of Mandarin\n", y = "Onset displacement (ms) \n") +
+  theme(legend.position = "none") +
+  theme(text=element_text(size=15))
+
+ggsave(p_c_v, filename = "Mandarin_consonants_vowel.png",  width = 6, height = 5, bg = "transparent")
+
 ```
 
 ```{r}
@@ -138,8 +190,56 @@ ggplot(df_sum, aes(x=res, y=percent, fill=speaker, alpha=speech_rate)) +
   coord_cartesian(ylim = c(0, 100))
 ```
 
+```{r manual comparison}
+## combine two datasets
+## we'll use alignment based on edit distance - so none of the indexing
+## magic is necessary!
 
-```{r}
+dfs <- list()
+
+manual_suyuan <- subset(manual, res == "Beijing")
+
+for (spk in unique(manual_suyuan$speaker)) {
+  suyuan_chunk <- filter(manual_suyuan, speaker==spk)
+  sijia_chunk <- filter(manual_sijia, speaker==spk)
+  alignment <- levenshtein_align(suyuan_chunk$phone, sijia_chunk$phone)
+  suyuan_chunk <- suyuan_chunk %>%
+    mutate(
+      phone_start_suyuan=phone_start,
+      phone_start_sijia=sijia_chunk$phone_start[alignment],
+      diff=abs(phone_start_suyuan - phone_start_sijia)
+    ) %>%
+    filter(!is.na(diff))
+  dfs[[length(dfs) + 1]] <- suyuan_chunk
+}
+
+df_manual <- bind_rows(dfs)
+
+# add in speaker information
+df_manual <- df_manual %>%
+    mutate(sex = case_when(speaker %in% c("ma_4336","ma_5530","ma_5542","ma_5716","ma_5779","ma_5800", "ma_5906","ma_5975") ~ "f",
+                        speaker %in% c("maa_4426","ma_5260","ma_5560","ma_5824")  ~ "m"),
+           res = case_when(speaker %in% c("ma_4336", "ma_5800") ~ "Canto",
+                           speaker %in% c("ma_5542", "ma_5824") ~ "Shanghai",
+                           speaker %in% c("ma_5560", "ma_5716") ~ "Beijing",
+                           speaker %in% c("ma_5975", "ma_5779") ~ "Tianjin",
+                           speaker %in% c("ma_4426", "ma_5530") ~ "Nanjing",
+                           speaker %in% c("ma_5260", "ma_5906") ~ "YunChuan"))
+
+ggplot(df_manual, aes(y=diff*1000, x=res, color=speaker)) +
+  #scale_color_manual(values = c("dodgerblue1", "darkgoldenrod2", 
+  #                              "coral1", "coral2",
+  #                              "dodgerblue2","darkgoldenrod2",
+  #                              "forestgreen")) +
+  geom_boxplot() +
+  scale_y_log10() +
+  theme_bw() + 
+  labs(x = "Variation of Mandarin\n", y = "Onset displacement (ms) \n") +
+  theme(legend.position = "none")
+```
+
+
+```{r model}
 df$diff_log <- log(df$diff)
 df$speech_rate_log_s <- scale(log(df$speech_rate))
 
@@ -174,8 +274,68 @@ mod_REML_0 <- lmer(diff_log ~ res + speech_rate_log_s +
             REML=T
             )
 
+mod_REMLPH <- lmer(diff_log ~ res + speech_rate_log_s + phone_category +
+              (1 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=T
+            )
+
+mod_REMLPH_0 <- lmer(diff_log ~ res + speech_rate_log_s + phone_category +
+                     (0 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=T
+            )
+
 
 summary(mod_ML)
 anova(mod_ML, mod_ML_0, test="Chisq") # no significant overall effect of variety
 anova(mod_REML, mod_REML_0, test="Chisq", refit=F) # significant variation across participants
+anova(mod_REMLPH, mod_REMLPH_0, test="Chisq", refit=F) # significant variation across phones?
+```
+
+## Closer look at sounds that behave differently across Mandarin varieties
+Beijing, Tianjin: sh/zh/ch
+Southern Manarin: drop nasals: m/n/ng
+Beijinng Tianjin: drop stops and h: p/t/k/b/d/g/h
+```{r}
+phone_set <- c("sh", "zh", "ch", "m", "n", "ng", "p","t","k","b","d","g","h")
+df1 <- subset(df,
+  df$simple_phone %in% phone_set
+)
+
+ggplot(df1, aes(y=diff*1000, x=res, color=speaker)) +
+  #scale_color_manual(values = c("dodgerblue1", "darkgoldenrod2", 
+  #                              "coral1", "coral2",
+  #                              "dodgerblue2","darkgoldenrod2",
+  #                              "forestgreen")) +
+  facet_wrap(~phone_category) +
+  geom_boxplot() +
+  scale_y_log10() +
+  theme_bw() + 
+  labs(x = "Variation of Mandarin\n", y = "Onset displacement (ms) \n") +
+  theme(legend.position = "none")
+```
+
+```{r}
+df1$diff_log <- log(df1$diff)
+df1$speech_rate_log_s <- scale(log(df1$speech_rate))
+
+# attempt to a linear mixed-effect model..?
+mod_ML_1 <- lmer(diff_log ~ res + speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df1,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=F
+            )
+
+mod_ML_0_1 <- lmer(diff_log ~ speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df1,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=F
+            )
+
+anova(mod_ML_1, mod_ML_0_1, test="Chisq") # no significant overall effect of variety
 ```
