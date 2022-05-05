@@ -239,18 +239,22 @@ df_sum <- df %>%
 df_sum$speaker<-gsub("ma_","",as.character(df_sum$speaker))
 
 # plot the percentages
-ggplot(df_sum, aes(x=res, y=percent, fill=speaker, alpha=speech_rate)) + 
-  scale_alpha_continuous(range = c(0.35, 0.9)) +
-  #scale_fill_manual(values = c("dodgerblue1", "darkgoldenrod2", 
-  #                              "coral1", "coral2",
-  #                              "dodgerblue2","darkgoldenrod2",
-  #                              "forestgreen")) +
+ggplot(df_sum, aes(x=res, y=percent, fill=res, group=speaker)) + 
   facet_grid(~range) +
   theme_bw() + 
   geom_bar(stat='identity', width = 0.8, position = position_dodge(width = 0.9)) +
-  labs(x = "Variation of Mandarin", y = "Percent of aligner boundaries \n within threshold of human placement") +
-  theme(legend.position = "none") +
+  labs(x = "Variety of Mandarin", y = "Percent of aligner boundaries \n within threshold of human placement") +
+  scale_fill_brewer(palette="Dark2") +
+  scale_colour_brewer(palette="Dark2") +
+  theme(legend.position = "none",
+        axis.title=element_text(size=16, face="bold",),
+        axis.text=element_text(size=14, colour="black"),
+        axis.text.x=element_text(size=14, angle=45,hjust=1, colour="black"),
+        panel.grid=element_blank(),
+        panel.grid.major.y=element_line(size=0.1, colour="grey")) +
   coord_cartesian(ylim = c(0, 100))
+
+ggsave(filename = "graphs/Mandarin_barchart.png",  width = 10, height = 5, bg = "transparent")
 ```
 
 ```{r manual comparison}
