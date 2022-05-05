@@ -138,7 +138,7 @@ ggplot(df, aes(y=diff*1000, x=res, color=res, shade=speaker)) +
   scale_fill_brewer(palette="Dark2") +
   scale_colour_brewer(palette="Dark2") +
   theme_bw() + 
-  labs(x = "Variation of Mandarin\n", y = "Onset displacement (ms) \n") +
+  labs(x = "Variety of Mandarin\n", y = "Onset displacement (ms) \n") +
   theme(legend.position = "none") +
   theme(axis.title=element_text(size=16, face="bold",),
         axis.text=element_text(size=14, colour="black"),
@@ -181,7 +181,7 @@ ggplot(df, aes(y=diff*1000, x=res, color=res)) +
   scale_fill_brewer(palette="Dark2") +
   scale_colour_brewer(palette="Dark2") +
   theme_bw() + 
-  labs(x = "Variation of Mandarin\n", y = "Onset displacement (ms) \n") +
+  labs(x = "Variety of Mandarin\n", y = "Onset displacement (ms) \n") +
   theme(legend.position = "none") +
   theme(axis.title=element_text(size=16, face="bold",),
         axis.text=element_text(size=14, colour="black"),
