@@ -31,23 +31,38 @@ source("levenshtein.r")
 ## we'll use alignment based on edit distance - so none of the indexing
 ## magic is necessary!
 
-dfs <- list()
+dfs_mfa <- list()
+dfs_sijia <- list()
 
 for (spk in unique(mfa$speaker)) {
   mfa_chunk <- filter(mfa, speaker==spk)
-  manual_chunk <- filter(manual, speaker==spk)
-  alignment <- levenshtein_align(mfa_chunk$phone, manual_chunk$phone)
-  mfa_chunk <- mfa_chunk %>%
+  suyuan_chunk <- filter(manual, speaker==spk)
+  sijia_chunk <- filter(manual_sijia, speaker==spk)
+  alignment_mfa <- levenshtein_align(suyuan_chunk$phone, mfa_chunk$phone)
+  suyuan_chunk <- suyuan_chunk %>%
     mutate(
-      phone_start_mfa=phone_start,
-      phone_start_manual=manual_chunk$phone_start[alignment],
-      diff=abs(phone_start_mfa - phone_start_manual)
-    ) %>%
-    filter(!is.na(diff))
-  dfs[[length(dfs) + 1]] <- mfa_chunk
+      phone_start_suyuan=phone_start,
+      phone_start_other=mfa_chunk$phone_start[alignment_mfa],
+      other_type="mfa",
+      diff=abs(phone_start_other - phone_start_suyuan),
+    )
+  if (nrow(sijia_chunk > 0)) {
+    alignment_sijia <- levenshtein_align(suyuan_chunk$phone, sijia_chunk$phone)
+    suyuan_chunk2 <- suyuan_chunk %>%
+    mutate(
+      phone_start_other=sijia_chunk$phone_start[alignment_sijia],
+      other_type="sijia",
+      diff=abs(phone_start_other - phone_start_suyuan)
+    )
+    dfs_sijia[[length(dfs_sijia) + 1]] <- suyuan_chunk2
+  }
+  dfs_mfa[[length(dfs_mfa) + 1]] <- suyuan_chunk
 }
 
-df <- bind_rows(dfs)
+df_1 <- bind_rows(dfs_mfa)
+df_2 <- bind_rows(dfs_sijia)
+df <- bind_rows(df_1, df_2) %>%
+  filter(!is.na(diff))
 
 df <- df[!grepl("[a-zA-Z]", df$word),]
 
@@ -74,64 +89,34 @@ df <- df %>%
                                       phone %in% c("m", "n", "ng") ~ "nasal", #3
                                       )) 
 
+df$res <- factor(df$res,
+                 levels=c(
+                   "Beijing",
+                   "Canto",
+                   "Shanghai",
+                   "Nanjing",
+                   "Tianjin",
+                   "Xinan"
+                 ))
+df$comparison_type <- ifelse(
+  df$other_type=="mfa",
+  "mfa vs. manual 1",
+  "manual 1 vs. manual 2"
+) %>%
+  factor(levels=c("manual 1 vs. manual 2",
+                  "mfa vs. manual 1"))
 ```
 
-```{r creaate data overview}
-df_overview <- df %>%
-  group_by(res, speaker) %>%
-  summarise(sd=sd(diff, na.rm=T),
-            mean=mean(diff, na.rm=T),
-            median=median(diff, na.rm=T),
-            under_20_ms=mean(diff < 0.02, na.rm=T),
-            over_100_ms=mean(diff > 0.1, na.rm=T)) %>%
-  ungroup()
-```
+## Creating combined plots
 
-```{r plot }
-p_log <- ggplot(df, aes(y=diff*1000, x=res, color=res, shade=speaker)) +
-  #scale_color_manual(values = c("dodgerblue2", "darkgoldenrod2", 
-  #                              "coral2", "coral2",
-  #                              "dodgerblue2","darkgoldenrod2",
-  #                              "seagreen", "seashell",
-  #                              "firebrick1", "firebrick4",
-  #                              "mediumorchid3", "mediumorchid4")) +
-  geom_boxplot() +
-  scale_y_log10() +
-  theme_bw() + 
-  labs(x = "Variation of Mandarin\n", y = "Onset displacement (ms) \n") +
-  theme(legend.position = "none")
-
-ggsave(p_log, filename = "Mandarin_log.png",  width = 9, height = 5, bg = "transparent")
-
-```
-
-```{r plot box plot}
-p_log_2 <- ggplot(df, aes(y=diff*1000, x=res, color=res, shade=speaker)) +
-  #scale_color_manual(values = c("dodgerblue2", "darkgoldenrod2", 
-  #                              "coral2", "coral2",
-  #                              "dodgerblue2","darkgoldenrod2",
-  #                              "seagreen", "seashell",
-  #                              "firebrick1", "firebrick4",
-  #                              "mediumorchid3", "mediumorchid4")) +
-  #facet_wrap(~phone_category) +
-  coord_trans(y = 'log') +
-  scale_y_continuous(breaks=c(10,50, 100, 500, 1000, 2000, 3000)) +
-  # using violins to show distributions per vowel
-  geom_boxplot() +
-  # adding the median separately as a point
-  theme_bw() + 
-  labs(x = "Variation of Mandarin\n", y = "Onset displacement (ms) \n") +
-  theme(legend.position = "none") +
-  theme(text=element_text(size=14))
-
-ggsave(p_log_2, filename = "Mandarin_log_2.png",  width = 9, height = 5, bg = "transparent")
-
-```
 By-speaker.
 
 ```{r plot violin plot by speaker}
+
+
+
 df_means <- df %>%
-  group_by(speaker, res) %>%
+  group_by(comparison_type, speaker, res) %>%
   summarise(diff_mean=mean(diff),
             diff_median=median(diff),
             mean_symbol="μ",
@@ -144,7 +129,8 @@ mean_fun <- function(x){
   return(data.frame(y = x, label = paste0("  ", x, " ms")))
 }
 
-p <- ggplot(df, aes(y=diff*1000, x=res, color=res, shade=speaker)) +
+ggplot(df, aes(y=diff*1000, x=res, color=res, shade=speaker)) +
+  facet_grid(.~comparison_type, drop=T, scales="free_x", space="free_x") +
   # using violins to show distributions per vowel
   geom_violin(aes(fill=res), col=NA, alpha=0.15) +
   geom_text(data=df_means, aes(y=diff_mean*1000, label=mean_symbol), size=4, position=position_dodge(width=0.9)) +
@@ -164,9 +150,11 @@ p <- ggplot(df, aes(y=diff*1000, x=res, color=res, shade=speaker)) +
   theme(legend.position = "none") +
   theme(axis.title=element_text(size=16, face="bold",),
         axis.text=element_text(size=14, colour="black"),
-        panel.grid=element_blank())
+        panel.grid=element_blank(),
+        strip.text=element_text(size=14, colour="black"),
+        strip.background=element_blank())
 
-ggsave(p, filename = "graphs/Mandarin_by_speaker.png",  width = 9, height = 5, bg = "transparent")
+ggsave(filename = "asa_graphs/Mandarin_by_speaker.png",  width = 13, height = 5, bg = "transparent")
 
 ```
 
@@ -174,6 +162,7 @@ By-variety.
 
 ```{r plot violin plot by variety}
 df_means <- df %>%
+  filter(other_type=="mfa") %>%
   group_by(res) %>%
   summarise(diff_mean=mean(diff),
             diff_median=median(diff),
@@ -181,13 +170,14 @@ df_means <- df %>%
             diff_mean_label=paste0(round(diff_mean*1000), " ms"),
             diff_median_label=paste0(round(diff_median*1000), " ms")) %>%
   ungroup()
+  
 
 mean_fun <- function(x){
   print(x)
   return(data.frame(y = x, label = paste0("  ", x, " ms")))
 }
 
-ggplot(df, aes(y=diff*1000, x=res, color=res)) +
+ggplot(filter(df, other_type=="mfa"), aes(y=diff*1000, x=res, color=res)) +
   # using violins to show distributions per vowel
   geom_violin(aes(fill=res), col=NA, alpha=0.15) +
   geom_text(data=df_means, aes(y=diff_mean*1000, label=mean_symbol), size=4, position=position_dodge(width=0.9)) +
@@ -209,12 +199,16 @@ ggplot(df, aes(y=diff*1000, x=res, color=res)) +
         axis.text=element_text(size=14, colour="black"),
         panel.grid=element_blank())
 
-ggsave(filename = "graphs/Mandarin_by_variety.png",  width = 9, height = 5, bg = "transparent")
+ggsave(filename = "asa_graphs/Mandarin_by_variety.png",  width = 8.933, height = 5, bg = "transparent")
 
 ```
 
+## For mfa vs. manual only
+
 ```{r consonant vs. vowel}
-p_c_v <- ggplot(df, aes(y=diff*1000, x=phone_category, color=phone_category)) +
+df_mfa <- filter(df, other_type=="mfa")
+
+p_c_v <- ggplot(df_mfa, aes(y=diff*1000, x=phone_category, color=phone_category)) +
   #scale_color_manual(values = c("dodgerblue2", "darkgoldenrod2", 
   #                              "coral2", "coral2",
   #                              "dodgerblue2","darkgoldenrod2",
@@ -232,7 +226,7 @@ p_c_v <- ggplot(df, aes(y=diff*1000, x=phone_category, color=phone_category)) +
   theme(legend.position = "none") +
   theme(text=element_text(size=15))
 
-ggsave(p_c_v, filename = "Mandarin_consonants_vowel.png",  width = 6, height = 5, bg = "transparent")
+ggsave(p_c_v, filename = "asa_graphs/Mandarin_consonants_vowel.png",  width = 6, height = 5, bg = "transparent")
 
 ```
 
@@ -241,7 +235,7 @@ ggsave(p_c_v, filename = "Mandarin_consonants_vowel.png",  width = 6, height = 5
 
 # create summary df to summarize the percent 
 # of misalignment that fall in 10ms or 20ms
-df_sum <- df %>%
+df_sum <- df_mfa %>%
   group_by(speaker) %>%
   summarise(n_phone=n(),
             n_phone_10=sum(diff < 0.01),
@@ -275,195 +269,97 @@ p_percentage <- ggplot(df_sum, aes(x=res, y=percent, fill=res, shade=speaker)) +
   theme(legend.position = "none") +
   coord_cartesian(ylim = c(0, 100))
 
-ggsave(p_study, filename = "percentage.png",  width = 9, height = 5, bg = "transparent")
+ggsave(p_percentage, filename = "asa_graphs/percentage.png",  width = 9, height = 5, bg = "transparent")
 
 ```
 
-```{r manual comparison}
-## combine two datasets
-## we'll use alignment based on edit distance - so none of the indexing
-## magic is necessary!
+## Modelling
 
-dfs <- list()
-
-manual_suyuan <- subset(manual, res%in%c("Beijing","Shanghai","Canto"))
-
-for (spk in unique(manual_suyuan$speaker)) {
-  suyuan_chunk <- filter(manual_suyuan, speaker==spk)
-  sijia_chunk <- filter(manual_sijia, speaker==spk)
-  alignment <- levenshtein_align(suyuan_chunk$phone, sijia_chunk$phone)
-  suyuan_chunk <- suyuan_chunk %>%
-    mutate(
-      phone_start_suyuan=phone_start,
-      phone_start_sijia=sijia_chunk$phone_start[alignment],
-      diff=abs(phone_start_suyuan - phone_start_sijia)
-    ) %>%
-    filter(!is.na(diff))
-  dfs[[length(dfs) + 1]] <- suyuan_chunk
-}
-
-df_manual <- bind_rows(dfs)
-
-# add in speaker information
-df_manual <- df_manual %>%
-    mutate(sex = case_when(speaker %in% c("ma_4336","ma_5530","ma_5542","ma_5716","ma_5779","ma_5800", "ma_5906","ma_5975") ~ "f",
-                        speaker %in% c("maa_4426","ma_5260","ma_5560","ma_5824")  ~ "m"),
-           res = case_when(speaker %in% c("ma_4336", "ma_5800") ~ "Canto",
-                           speaker %in% c("ma_5542", "ma_5824") ~ "Shanghai",
-                           speaker %in% c("ma_5560", "ma_5716") ~ "Beijing",
-                           speaker %in% c("ma_5975", "ma_5779") ~ "Tianjin",
-                           speaker %in% c("ma_4426", "ma_5530") ~ "Nanjing",
-                           speaker %in% c("ma_5260", "ma_5906") ~ "YunChuan"))
-
-ggplot(df_manual, aes(y=diff*1000, x=res, color=speaker)) +
-  #scale_color_manual(values = c("dodgerblue1", "darkgoldenrod2", 
-  #                              "coral1", "coral2",
-  #                              "dodgerblue2","darkgoldenrod2",
-  #                              "forestgreen")) +
-  geom_boxplot() +
-  scale_y_log10() +
-  theme_bw() + 
-  labs(x = "Variation of Mandarin\n", y = "Onset displacement (ms) \n") +
-  theme(legend.position = "none")
-
-```
-
-```{r manual comparison by speaker}
-##By speaker###
-df_means_manual <- df_manual %>%
-  group_by(speaker, res) %>%
-  summarise(diff_mean=mean(diff),
-            diff_median=median(diff),
-            mean_symbol="μ",
-            diff_mean_label=paste0(round(diff_mean*1000), " ms"),
-            diff_median_label=paste0(round(diff_median*1000), " ms")) %>%
-  ungroup()
-
-mean_fun <- function(x){
-  print(x)
-  return(data.frame(y = x, label = paste0("  ", x, " ms")))
-}
-
-ggplot(df_manual, aes(y=diff*1000, x=res, color=res, shade=speaker)) +
-  # using violins to show distributions per vowel
-  geom_violin(aes(fill=res), col=NA, alpha=0.15) +
-  geom_text(data=df_means_manual, aes(y=diff_mean*1000, label=mean_symbol), size=4, position=position_dodge(width=0.9)) +
-  geom_text(data=df_means_manual, aes(y=diff_mean*1000*1.7, label=diff_mean_label), size=4, position=position_dodge(width=0.9)) +
-  geom_point(data=df_means_manual, aes(y=diff_median*1000), size=2.5, position=position_dodge(width=0.9),
-             shape=21, fill=NA) +
-  geom_point(data=df_means_manual, aes(y=diff_median*1000), size=1, position=position_dodge(width=0.9),
-             shape=16, fill=NA) +
-  geom_text(data=df_means_manual, aes(y=diff_median*1000*0.59, label=diff_median_label), size=4, position=position_dodge(width=0.9)) +
-  # adding the median separately as a point
-  scale_y_log10(breaks=c(1, 3, 10,30, 100, 300, 1000),
-                limits=c(0.01, 1000)) +
-  scale_fill_brewer(palette="Dark2") +
-  scale_colour_brewer(palette="Dark2") +
-  theme_bw() + 
-  labs(x = "Variety of Mandarin\n", y = "Onset displacement (ms) \n") +
-  theme(legend.position = "none") +
-  theme(axis.title=element_text(size=16, face="bold",),
-        axis.text=element_text(size=14, colour="black"),
-        panel.grid=element_blank())
-
-ggsave(filename = "Mandarin_manual_by_speaker.png",  width = 9, height = 5, bg = "transparent")
-```
-
-```{r manual comparison by variety}
-df_means_manual <- df_manual %>%
-  group_by(res) %>%
-  summarise(diff_mean=mean(diff),
-            diff_median=median(diff),
-            mean_symbol="μ",
-            diff_mean_label=paste0(round(diff_mean*1000), " ms"),
-            diff_median_label=paste0(round(diff_median*1000), " ms")) %>%
-  ungroup()
-
-mean_fun <- function(x){
-  print(x)
-  return(data.frame(y = x, label = paste0("  ", x, " ms")))
-}
-
-ggplot(df_manual, aes(y=diff*1000, x=res, color=res)) +
-  # using violins to show distributions per vowel
-  geom_violin(aes(fill=res), col=NA, alpha=0.15) +
-  geom_text(data=df_means_manual, aes(y=diff_mean*1000, label=mean_symbol), size=4, position=position_dodge(width=0.9)) +
-  geom_text(data=df_means_manual, aes(y=diff_mean*1000*1.7, label=diff_mean_label), size=4, position=position_dodge(width=0.9)) +
-  geom_point(data=df_means_manual, aes(y=diff_median*1000), size=2.5, position=position_dodge(width=0.9),
-             shape=21, fill=NA) +
-  geom_point(data=df_means_manual, aes(y=diff_median*1000), size=1, position=position_dodge(width=0.9),
-             shape=16, fill=NA) +
-  geom_text(data=df_means_manual, aes(y=diff_median*1000*0.59, label=diff_median_label), size=4, position=position_dodge(width=0.9)) +
-  # adding the median separately as a point
-  scale_y_log10(breaks=c(1, 3, 10,30, 100, 300, 1000),
-                limits=c(0.01, 1000)) +
-  scale_fill_brewer(palette="Dark2") +
-  scale_colour_brewer(palette="Dark2") +
-  theme_bw() + 
-  labs(x = "Variety of Mandarin\n", y = "Onset displacement (ms) \n") +
-  theme(legend.position = "none") +
-  theme(axis.title=element_text(size=16, face="bold",),
-        axis.text=element_text(size=14, colour="black"),
-        panel.grid=element_blank())
-
-ggsave(filename = "Mandarin_manual_by_variety.png",  width = 9, height = 5, bg = "transparent")
-```
-
+1) Testing only within the MFA vs. Suyuan comparisons: significant variation by variety? Significant variation by speaker?
 
 ```{r model}
 df$diff_log <- log(df$diff)
 df$speech_rate_log_s <- scale(log(df$speech_rate))
+
+df_mfa <- filter(df, other_type=="mfa")
 
 library(optimx)
 
 # attempt to a linear mixed-effect model..?
 mod_ML <- lmer(diff_log ~ res + speech_rate_log_s +
               (1 + speech_rate_log_s | speaker),
-            data=df,
+            data=df_mfa,
             control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
             REML=F
             )
 
 mod_ML_0 <- lmer(diff_log ~ speech_rate_log_s +
               (1 + speech_rate_log_s | speaker),
-            data=df,
+            data=df_mfa,
             control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
             REML=F
             )
 
 mod_REML <- lmer(diff_log ~ res + speech_rate_log_s +
               (1 + speech_rate_log_s | speaker),
-            data=df,
+            data=df_mfa,
             control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
             REML=T
             )
 
 mod_REML_0 <- lmer(diff_log ~ res + speech_rate_log_s +
                      (0 + speech_rate_log_s | speaker),
-            data=df,
+            data=df_mfa,
             control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
             REML=T
             )
 
-mod_REMLPH <- lmer(diff_log ~ res + speech_rate_log_s + phone_category +
-              (1 + speech_rate_log_s | speaker),
-            data=df,
-            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
-            REML=T
-            )
-
-mod_REMLPH_0 <- lmer(diff_log ~ res + speech_rate_log_s + phone_category +
-                     (0 + speech_rate_log_s | speaker),
-            data=df,
-            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
-            REML=T
-            )
+# mod_REMLPH <- lmer(diff_log ~ res + speech_rate_log_s + phone_category +
+#               (1 + speech_rate_log_s + phone_category | speaker),
+#             data=df_mfa,
+#             control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+#             REML=T
+#             )
+# 
+# mod_REMLPH_0 <- lmer(diff_log ~ res + speech_rate_log_s + 
+#                      (1 + speech_rate_log_s + phone_category | speaker),
+#             data=df_mfa,
+#             control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+#             REML=T
+#             )
 
 
 summary(mod_ML)
 anova(mod_ML, mod_ML_0, test="Chisq") # no significant overall effect of variety
 anova(mod_REML, mod_REML_0, test="Chisq", refit=F) # significant variation across participants
-anova(mod_REMLPH, mod_REMLPH_0, test="Chisq", refit=F) # significant variation across phones?
+#anova(mod_REMLPH, mod_REMLPH_0, test="Chisq", refit=F) # significant variation across phones?
+```
+
+2) Testing across the MFA vs. Suyuan and Sijia vs. Suyuan comparisons: significant difference in accuracy?
+
+```{r model}
+mod_comp_ML <- lmer(diff_log ~ other_type + speech_rate_log_s + res +
+              (1 + other_type | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=F
+            )
+
+mod_comp_ML_0 <- lmer(diff_log ~ speech_rate_log_s + res + 
+              (1 + other_type | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=F
+            )
+
+summary(mod_comp_ML) #
+# model predictions:
+# 1) mean onset displacement for Beijing for manual alignments
+exp(fixef(mod_comp_ML)[1] + fixef(mod_comp_ML)[2] + fixef(mod_comp_ML)[3] * mean(df$speech_rate_log_s)) # ~6 ms
+# 2) same for manual vs. mfa
+exp(fixef(mod_comp_ML)[1] + fixef(mod_comp_ML)[3] * mean(df$speech_rate_log_s)) # ~16 ms
+
+anova(mod_comp_ML, mod_comp_ML_0, test="Chisq") # significant difference between manual alignment consistency vs. consistency between manual and mfa
 ```
 
 ## Closer look at sounds that behave differently across Mandarin varieties
@@ -472,8 +368,8 @@ Southern Manarin: drop nasals: m/n/ng
 Beijinng Tianjin: drop stops and h: p/t/k/b/d/g/h
 ```{r}
 phone_set <- c("sh", "zh", "ch", "m", "n", "ng", "p","t","k","b","d","g","h")
-df1 <- subset(df,
-  df$simple_phone %in% phone_set
+df1 <- subset(df_mfa,
+  simple_phone %in% phone_set
 )
 
 ggplot(df1, aes(y=diff*1000, x=res, color=speaker)) +
