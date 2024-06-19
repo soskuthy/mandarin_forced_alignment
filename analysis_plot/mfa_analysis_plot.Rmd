@@ -1,0 +1,582 @@
+---
+title: "MFA_analysis_2"
+author: "Suyuan Liu"
+date: '2022-10-24'
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(data.table)
+library(lme4)
+library(ggh4x)
+
+# prepare for levenshtein mapping
+range01 <- function(x){(x-min(x))/(max(x)-min(x))}
+source("levenshtein.r")
+```
+
+# compare suyuan and sijia alignment
+```{r load_data}
+df_manual <- read.csv("/Users/liusuyuan/Desktop/cleaned_MFA/df_manual.csv", header=TRUE)
+```
+
+```{r data_overview}
+df_manual %>%
+  group_by(res, speaker) %>%
+  summarise(sd=sd(diff, na.rm=T),
+            mean=mean(diff, na.rm=T),
+            median=median(diff, na.rm=T),
+            under_20_ms=mean(diff < 0.02, na.rm=T),
+            over_100_ms=mean(diff > 0.1, na.rm=T)) %>%
+  ungroup()
+
+df_manual %>%
+  summarise(sd=sd(diff, na.rm=T),
+            mean=mean(diff, na.rm=T),
+            median=median(diff, na.rm=T),
+            under_20_ms=mean(diff < 0.02, na.rm=T),
+            over_100_ms=mean(diff > 0.1, na.rm=T))
+```
+
+```{r manual comparison by speaker}
+##By speaker###
+df_means_manual_speaker <- df_manual %>%
+  group_by(speaker, res) %>%
+  summarise(diff_mean=mean(diff),
+            diff_median=median(diff),
+            mean_symbol="μ",
+            diff_mean_label=paste0(round(diff_mean*1000), " ms"),
+            diff_median_label=paste0(round(diff_median*1000), " ms")) %>%
+  ungroup()
+
+mean_fun <- function(x){
+  print(x)
+  return(data.frame(y = x, label = paste0("  ", x, " ms")))
+}
+
+ggplot(df_manual, aes(y=diff*1000, x=res, color=res, shade=speaker)) +
+  # using violins to show distributions per vowel
+  geom_violin(aes(fill=res), col=NA, alpha=0.15) +
+  geom_text(data=df_means_manual_speaker, aes(y=diff_mean*1000, label=mean_symbol), size=4, position=position_dodge(width=0.9)) +
+  geom_text(data=df_means_manual_speaker, aes(y=diff_mean*1000*1.7, label=diff_mean_label), size=4, position=position_dodge(width=0.9)) +
+  geom_point(data=df_means_manual_speaker, aes(y=diff_median*1000), size=2.5, position=position_dodge(width=0.9),
+             shape=21, fill=NA) +
+  geom_point(data=df_means_manual_speaker, aes(y=diff_median*1000), size=1, position=position_dodge(width=0.9),
+             shape=16, fill=NA) +
+  geom_text(data=df_means_manual_speaker, aes(y=diff_median*1000*0.59, label=diff_median_label), size=4, position=position_dodge(width=0.9)) +
+  # adding the median separately as a point
+  scale_y_log10(breaks=c(1, 3, 10,30, 100, 300, 1000),
+                limits=c(0.01, 1000)) +
+  scale_fill_brewer(palette="Dark2") +
+  scale_colour_brewer(palette="Dark2") +
+  theme_bw() + 
+  labs(x = "Variety of Mandarin\n", y = "Onset displacement (ms) \n") +
+  theme(legend.position = "none") +
+  theme(axis.title=element_text(size=16, face="bold",),
+        axis.text=element_text(size=14, colour="black"),
+        panel.grid=element_blank())
+```
+
+```{r manual comparison by variety}
+df_means_manual <- df_manual %>%
+  group_by(res) %>%
+  summarise(diff_mean=mean(diff),
+            diff_median=median(diff),
+            mean_symbol="μ",
+            diff_mean_label=paste0(round(diff_mean*1000), " ms"),
+            diff_median_label=paste0(round(diff_median*1000), " ms")) %>%
+  ungroup()
+
+mean_fun <- function(x){
+  print(x)
+  return(data.frame(y = x, label = paste0("  ", x, " ms")))
+}
+
+ggplot(df_manual, aes(y=diff*1000, x=res, color=res)) +
+  # using violins to show distributions per vowel
+  geom_violin(aes(fill=res), col=NA, alpha=0.15) +
+  geom_text(data=df_means_manual, aes(y=diff_mean*1000, label=mean_symbol), size=4, position=position_dodge(width=0.9)) +
+  geom_text(data=df_means_manual, aes(y=diff_mean*1000*1.7, label=diff_mean_label), size=4, position=position_dodge(width=0.9)) +
+  geom_point(data=df_means_manual, aes(y=diff_median*1000), size=2.5, position=position_dodge(width=0.9),
+             shape=21, fill=NA) +
+  geom_point(data=df_means_manual, aes(y=diff_median*1000), size=1, position=position_dodge(width=0.9),
+             shape=16, fill=NA) +
+  geom_text(data=df_means_manual, aes(y=diff_median*1000*0.59, label=diff_median_label), size=4, position=position_dodge(width=0.9)) +
+  # adding the median separately as a point
+  scale_y_log10(breaks=c(1, 3, 10, 30, 100, 300, 1000, 3000),
+                limits=c(0.01, 1000)) +
+  scale_fill_brewer(palette="Dark2") +
+  scale_colour_brewer(palette="Dark2") +
+  theme_bw() + 
+  labs(x = "Variety of Mandarin\n", y = "Onset displacement (ms) \n") +
+  theme(legend.position = "none") +
+  theme(axis.title=element_text(size=16, face="bold",),
+        axis.text=element_text(size=14, colour="black"),
+        panel.grid=element_blank())
+
+```
+
+```{r model}
+df_manual$diff_log <- log(df_manual$diff)
+df_manual$speech_rate_log_s <- scale(log(df_manual$speech_rate))
+
+library(optimx)
+
+mod_ML <- lmer(diff_log ~ res + speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df_manual,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=F
+            )
+
+mod_ML_0 <- lmer(diff_log ~ speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df_manual,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=F
+            )
+
+mod_REML <- lmer(diff_log ~ res + speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df_manual,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=T
+            )
+
+mod_REML_0 <- lmer(diff_log ~ res + speech_rate_log_s +
+                     (0 + speech_rate_log_s | speaker),
+            data=df_manual,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=T
+            )
+
+#mod_REMLPH <- lmer(diff_log ~ res + speech_rate_log_s + phone_category +
+#              (1 + speech_rate_log_s | speaker),
+#            data=df_manual,
+#            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+#            REML=T
+#            )
+
+#mod_REMLPH_0 <- lmer(diff_log ~ res + speech_rate_log_s + phone_category +
+#                     (0 + speech_rate_log_s | speaker),
+#            data=df_manual,
+#            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+#            REML=T
+#            )
+
+
+summary(mod_ML)
+anova(mod_ML, mod_ML_0, test="Chisq") # no significant overall effect of variety
+anova(mod_REML, mod_REML_0, test="Chisq", refit=F) # significant variation across participants
+#anova(mod_REMLPH, mod_REMLPH_0, test="Chisq", refit=F)
+```
+
+
+# compare mfa2 & suyuan
+
+```{r load_data}
+df <- read.csv("/Users/liusuyuan/Desktop/cleaned_MFA/df_model.csv", header=TRUE)
+```
+
+```{r data_overview}
+df %>%
+  group_by(res, speaker) %>%
+  summarise(sd=sd(diff, na.rm=T),
+            mean=mean(diff, na.rm=T),
+            median=median(diff, na.rm=T),
+            under_20_ms=mean(diff < 0.02, na.rm=T),
+            over_100_ms=mean(diff > 0.1, na.rm=T)) %>%
+  ungroup()
+
+df %>%
+  summarise(sd=sd(diff, na.rm=T),
+            mean=mean(diff, na.rm=T),
+            median=median(diff, na.rm=T),
+            under_20_ms=mean(diff < 0.02, na.rm=T),
+            over_100_ms=mean(diff > 0.1, na.rm=T))
+```
+
+```{r by_speaker}
+df_means_speaker <- df %>%
+  group_by(speaker, res) %>%
+  summarise(diff_mean=mean(diff),
+            diff_median=median(diff),
+            mean_symbol="μ",
+            diff_mean_label=paste0(round(diff_mean*1000), " ms"),
+            diff_median_label=paste0(round(diff_median*1000), " ms")) %>%
+  ungroup()
+
+mean_fun <- function(x){
+  print(x)
+  return(data.frame(y = x, label = paste0("  ", x, " ms")))
+}
+
+ggplot(df, aes(y=diff*1000, x=res, color=res, shade=speaker)) +
+  # using violins to show distributions per vowel
+  geom_violin(aes(fill=res), col=NA, alpha=0.15) +
+  geom_text(data=df_means_speaker, aes(y=diff_mean*1000, label=mean_symbol), size=4, position=position_dodge(width=0.9)) +
+  geom_text(data=df_means_speaker, aes(y=diff_mean*1000*1.7, label=diff_mean_label), size=4, position=position_dodge(width=0.9)) +
+  geom_point(data=df_means_speaker, aes(y=diff_median*1000), size=2.5, position=position_dodge(width=0.9),
+             shape=21, fill=NA) +
+  geom_point(data=df_means_speaker, aes(y=diff_median*1000), size=1, position=position_dodge(width=0.9),
+             shape=16, fill=NA) +
+  geom_text(data=df_means_speaker, aes(y=diff_median*1000*0.59, label=diff_median_label), size=4, position=position_dodge(width=0.9)) +
+  # adding the median separately as a point
+  scale_y_log10(breaks=c(1, 3, 10,30, 100, 300, 1000, 3000),
+                limits=c(0.5, 3500)) +
+  scale_fill_brewer(palette="Dark2") +
+  scale_colour_brewer(palette="Dark2") +
+  theme_bw() + 
+  labs(x = "Variety of Mandarin\n", y = "Onset displacement (ms) \n") +
+  theme(legend.position = "none") +
+  theme(axis.title=element_text(size=16, face="bold",),
+        axis.text=element_text(size=14, colour="black"),
+        panel.grid=element_blank())
+```
+
+```{r by_variety}
+df_means <- df %>%
+  group_by(res) %>%
+  summarise(diff_mean=mean(diff),
+            diff_median=median(diff),
+            mean_symbol="μ",
+            diff_mean_label=paste0(round(diff_mean*1000), " ms"),
+            diff_median_label=paste0(round(diff_median*1000), " ms")) %>%
+  ungroup()
+
+mean_fun <- function(x){
+  print(x)
+  return(data.frame(y = x, label = paste0("  ", x, " ms")))
+}
+
+ggplot(df, aes(y=diff*1000, x=res, color=res)) +
+  # using violins to show distributions per vowel
+  geom_violin(aes(fill=res), col=NA, alpha=0.15) +
+  #geom_text(data=df_means, aes(y=diff_mean*1000, label=mean_symbol), size=4, position=position_dodge(width=0.9)) +
+  #geom_text(data=df_means, aes(y=diff_mean*1000*1.7, label=diff_mean_label), size=4, position=position_dodge(width=0.9)) +
+  geom_point(data=df_means, aes(y=diff_median*1000), size=2.5, position=position_dodge(width=0.9),
+             shape=21, fill=NA) +
+  geom_point(data=df_means, aes(y=diff_median*1000), size=1, position=position_dodge(width=0.9),
+             shape=16, fill=NA) +
+  geom_text(data=df_means, aes(y=diff_median*1000*0.59, label=diff_median_label), size=4, position=position_dodge(width=0.9)) +
+  # adding the median separately as a point
+  scale_y_log10(breaks=c(1, 3, 10,30, 100, 300, 1000, 3000),
+                limits=c(0.5, 3500)) +
+  scale_fill_brewer(palette="Dark2") +
+  scale_colour_brewer(palette="Dark2") +
+  theme_bw() + 
+  labs(x = "Variety of Mandarin\n", y = "Onset displacement (ms) \n",
+       title = "Human-Aligner Agreement") +
+  theme(legend.position = "none") +
+  theme(axis.title=element_text(size=16, face="bold",),
+        axis.text=element_text(size=14, colour="black"),
+        panel.grid=element_blank(),
+        plot.title = element_text(size = 20, face = "bold"))
+  #geom_hline(yintercept=17.8, linetype="dashed", color = "red") +
+  #geom_hline(yintercept=6.7, linetype="dashed", color = "red")
+
+#ggsave("/Users/liusuyuan/Documents/1_School/1_UBC/2_2021Spring/MFA_project/manuscript/plots/human-aligner.pdf", width = 8, height = 5)
+```
+
+```{r model}
+df$diff_log <- log(df$diff)
+df$speech_rate_log_s <- scale(log(df$speech_rate))
+
+library(optimx)
+
+mod_ML <- lmer(diff_log ~ res + speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=F
+            )
+
+mod_ML_0 <- lmer(diff_log ~ speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=F
+            )
+
+mod_REML <- lmer(diff_log ~ res + speech_rate_log_s +
+              (1 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=T
+            )
+
+mod_REML_0 <- lmer(diff_log ~ res + speech_rate_log_s +
+                     (0 + speech_rate_log_s | speaker),
+            data=df,
+            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+            REML=T
+            )
+
+#mod_REMLPH <- lmer(diff_log ~ res + speech_rate_log_s + phone_category +
+#              (1 + speech_rate_log_s | speaker),
+#            data=df_mfa,
+#            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+#            REML=T
+#            )
+
+#mod_REMLPH_0 <- lmer(diff_log ~ res + speech_rate_log_s + phone_category +
+#                     (0 + speech_rate_log_s | speaker),
+#            data=df_mfa,
+#            control=lmerControl(optimizer = "optimx", calc.derivs = FALSE, optCtrl = list(method = "nlminb", starttests = FALSE, kkt = FALSE)),
+#            REML=T
+#            )
+
+
+summary(mod_ML)
+anova(mod_ML, mod_ML_0, test="Chisq") # no significant overall effect of variety
+anova(mod_REML, mod_REML_0, test="Chisq", refit=F) # significant variation across participants
+#anova(mod_REMLPH, mod_REMLPH_0, test="Chisq", refit=F)
+```
+
+
+# plot human-aligner and human-human in one plot
+```{r by_variety}
+df$method = "Human-Aligner"
+df_manual$method = "Human-Human"
+df_combined = bind_rows(df, df_manual)
+df_means$method = "Human-Aligner"
+df_means_manual$method = "Human-Human"
+df_combined_means = bind_rows(df_means, df_means_manual)
+
+ggplot(df_combined, aes(y=diff*1000, x=res, color=method, shape=method)) +
+  # using violins to show distributions per vowel
+  geom_violin(aes(fill=method), col=NA, alpha=0.15) +
+  geom_point(data=df_combined_means, aes(y=diff_median*1000), size=2.5, position=position_dodge(width=0.9), fill=NA) +
+  geom_point(data=df_combined_means, aes(y=diff_median*1000, fill = method), size=1, position=position_dodge(width=0.9)) +
+  scale_shape_manual(values=c(21, 24)) +
+  geom_text(data=df_combined_means, aes(y=diff_median*1000*0.59, label=diff_median_label), size=4, position=position_dodge(width=0.9),
+            show_guide = FALSE) +
+  geom_text(data=df_combined_means, aes(y=diff_mean*1000, label=mean_symbol), size=4, position=position_dodge(width=0.9),
+            show_guide = FALSE) +
+  geom_text(data=df_combined_means, aes(y=diff_mean*1000*1.7, label=diff_mean_label), size=4, position=position_dodge(width=0.9),
+            show_guide = FALSE) +
+  # adding the median separately as a point
+  scale_y_log10(breaks=c(1, 3, 10,30, 100, 300, 1000, 3000),
+                limits=c(0.1, 3500)) +
+  scale_fill_brewer(palette="Dark2") +
+  scale_colour_brewer(palette="Dark2") +
+  theme_bw() + 
+  labs(x = "Variety of Mandarin\n", y = "Onset displacement (ms) \n",
+       color = "Comparison",
+       fill = "Comparison",
+       shape = "Comparison") +
+  theme(axis.title=element_text(size=16, face="bold",),
+        axis.text=element_text(size=14, colour="black"),
+        panel.grid=element_blank(),
+        strip.text = element_text(size=14, face="bold"),
+        legend.position = "bottom",
+        axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)))
+
+#ggsave("/Users/liusuyuan/Documents/1_School/1_UBC/2_2021Spring/MFA_project/manuscript/plots/by_variety.png", width = 7, height = 5)
+
+```
+
+```{r by_speaker}
+df$method = "Human-Aligner"
+df_manual$method = "Human-Human"
+df_combined = bind_rows(df, df_manual)
+df_means_speaker$method = "Human-Aligner"
+df_means_manual_speaker$method = "Human-Human"
+df_combined_means_speaker = bind_rows(df_means_speaker, df_means_manual_speaker)
+
+ggplot(df_combined, aes(y=diff*1000, x=res, color=method, shape=method, shade=speaker)) +
+  # using violins to show distributions per vowel
+  facet_nested_wrap(~res + speaker, nrow = 2, ncol = 6, scales="free_x") +
+  geom_violin(aes(fill=method), col=NA, alpha=0.15) +
+  geom_text(data=df_combined_means_speaker, aes(y=diff_mean*1000, label=mean_symbol), size=4, position=position_dodge(width=0.9),
+            show_guide = FALSE) +
+  geom_text(data=df_combined_means_speaker, aes(y=diff_mean*1000*1.7, label=diff_mean_label), size=4, position=position_dodge(width=0.9),
+            show_guide = FALSE) +
+  geom_point(data=df_combined_means_speaker, aes(y=diff_median*1000), size=2.5, position=position_dodge(width=0.9)) +
+  geom_point(data=df_combined_means_speaker, aes(y=diff_median*1000, fill=method), size=1, position=position_dodge(width=0.9)) +
+    scale_shape_manual(values=c(21, 24)) +
+  geom_text(data=df_combined_means_speaker, aes(y=diff_median*1000*0.59, label=diff_median_label), size=4, position=position_dodge(width=0.9),
+            show_guide = FALSE) +
+  # adding the median separately as a point
+  scale_y_log10(breaks=c(1, 3, 10,30, 100, 300, 1000, 3000),
+                limits=c(0.1, 3500)) +
+  scale_fill_brewer(palette="Dark2") +
+  scale_colour_brewer(palette="Dark2") +
+  theme_bw() + 
+  labs(x = "Variety of Mandarin\n", y = "Onset displacement (ms) \n",
+       color = "Comparison",
+       fill = "Comparison",
+       shape = "Comparison") +
+  theme(axis.title=element_text(size=16, face="bold",),
+        axis.text=element_text(size=14, colour="black"),
+        panel.grid=element_blank(),
+        legend.position = "bottom",
+        legend.text = element_text(size=12),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text = element_text(size = 14, face = "bold"))
+
+#ggsave("/Users/liusuyuan/Documents/1_School/1_UBC/2_2021Spring/MFA_project/manuscript/plots/by_speaker.png", width = 10, height = 6)
+
+```
+
+
+# plot participant metadata
+```{r participant_location_map}
+library(sf)
+library(mapchina)
+
+df <- china %>%
+        filter(Code_Province %in% as.character(10:82))
+sf_use_s2(FALSE)
+df <- df %>%
+        group_by(Name_Province) %>%
+        summarise(geometry = st_union(geometry))
+
+df$participant_n = case_when(df$Name_Province == "上海市" ~ 1,
+                             df$Name_Province == "云南省" ~ 1,
+                             df$Name_Province == "北京市" ~ 1,
+                             df$Name_Province == "天津市" ~ 1,
+                             df$Name_Province == "江苏省" ~ 1,
+                             df$Name_Province == "广东省" ~ 1,
+                             df$Name_Province == "四川省" ~ 1,
+                             TRUE ~ 0)
+df$Name_Province_eng = case_when(df$Name_Province == "上海市" ~ "Shanghai",
+                             df$Name_Province == "云南省" ~ "Xinan",
+                             df$Name_Province == "北京市" ~ "Beijing",
+                             df$Name_Province == "天津市" ~ "Tianjin",
+                             df$Name_Province == "江苏省" ~ "Nanjing",
+                             df$Name_Province == "广东省" ~ "Guangdong",
+                             TRUE ~ NA)
+
+df_training$training_n = case_when(
+  grepl("河口", df_training$Name_County) ~ 1,
+  df_training$Name_Province == "北京市" ~ 1,
+  grepl("武汉", df_training$Name_County) ~ 1,
+  TRUE ~ 0)
+
+df_training$Name_Province_eng_training = case_when(
+  #grepl("河口", df_training$Nam) ~ "Hekou",
+  df_training$Name_Province == "北京市" ~ "Beijing",
+  grepl("武汉", df_training$Name_County) ~ "Wuhan",
+  TRUE ~ NA)
+
+ggplot() +
+  geom_sf(data = df, aes(fill = participant_n)) +
+  scale_fill_distiller(palette = "Greys", 
+                       direction = 1,
+                       limits = c(0, 0.5),
+                       guide = guide_legend(),
+                       #breaks = c(0,1,3,5,7),
+                       name = "Participant number") +        
+  theme_bw() +
+  #ggtitle("Mandarin varieties distribution") +
+  theme(plot.title = element_text(color="black", size=14, face="bold.italic"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        legend.position = "none") +
+  ggrepel::geom_label_repel(
+    data= df,
+    aes(label = Name_Province_eng, 
+        geometry = geometry),
+    stat = "sf_coordinates",
+    min.segment.length = 0,
+    #segment.color = 'transparent',
+    segment.color = NA,
+    size = 3,
+    fill = alpha(c("white"),0.5)) +
+  ggrepel::geom_label_repel(
+    data= df_training,
+    aes(label = Name_Province_eng_training, 
+        geometry = geometry),
+    stat = "sf_coordinates",
+    min.segment.length = 0,
+    #segment.color = 'transparent',
+    segment.color = "grey",
+    size = 3,
+    fill = alpha(c("red"),0.5))  
+
+#ggsave("/Users/liusuyuan/Documents/1_School/1_UBC/2_2021Spring/MFA_project/manuscript/plots/Mandarin_varieties.png", width = 6, height = 4)
+    
+```
+
+
+# Correlation between human-human and human-aligner
+r=0; there is no relation between the variable.
+r=+1; perfectly positively correlated.
+r=-1; perfectly negatively correlated.
+r= 0 to 0.30; negligible correlation.
+r=0.30 to 0.50; moderate correlation.
+r=0.50 to 1 highly correlated.
+
+```{r}
+colnames(df_manual)[which(names(df_manual) == "phone_start_suyuan")] <- "phone_start_manual_2"
+colnames(df_manual)[which(names(df_manual) == "phone_start_sijia")] <- "phone_start_manual"
+colnames(df_manual)[which(names(df_manual) == "diff")] <- "Human-Human"
+colnames(df)[which(names(df) == "diff")] <- "Human-Aligner"
+
+
+df_combined_wider <- merge(df_manual, df, by = "phone_start_manual")
+```
+
+```{r}
+df_combined_means_speaker_wider <- 
+df_combined_means_speaker[, c("method", "diff_mean", "speaker", "res")] %>%
+  pivot_wider(names_from = method, values_from = diff_mean)
+
+#df_combined_means_speaker <- 
+df_combined[, c("method", "diff", "speaker", "res", "word_id", "phone", "word",
+                "previous", "following")] %>%
+  pivot_wider(names_from = method, values_from = diff)
+
+#Pearson correlation score: 0.1567868
+cor(df_combined_means_speaker_wider$`Human-Aligner`,
+    df_combined_means_speaker_wider$`Human-Human`, 
+    method = 'pearson')
+
+df_combined_means_variety_wider <- 
+df_combined_means[, c("method", "diff_mean", "res")] %>%
+  pivot_wider(names_from = method, values_from = diff_mean)
+
+#Pearson correlation score: 0.2934998
+cor(df_combined_means_variety_wider$`Human-Aligner`,
+    df_combined_means_variety_wider$`Human-Human`, 
+    method = 'pearson')
+
+
+#Pearson correlation score: 0.05423127
+cor.test(df_combined_wider$`Human-Aligner`,
+    df_combined_wider$`Human-Human`, 
+    method = 'pearson')
+
+library(ggpubr)
+
+scaleFUN <- function(x) sprintf("%.2f", x)
+
+
+ggplot(df_combined_wider, aes(x=`Human-Aligner`*100, 
+                              y=`Human-Human`*100))+
+  geom_point(aes(color=res.x), alpha=0.1) +
+  geom_smooth(color = "black", method="lm") +
+  theme_bw() + 
+  scale_color_brewer(palette = "Dark2") +
+  ylab("Human-Human Onset Displacement\n(Log-scaled, in ms)") +
+  xlab("Human-Aligner Onset Displacement\n(Log-scaled, in ms)") +
+  labs(color = "Mandarin Variety") +
+  #stat_cor(method="spearman", size = 5) +
+  scale_x_continuous(trans = "log", labels = scaleFUN) +
+  scale_y_continuous(trans = "log", labels = scaleFUN) +
+  annotate("label", x = 0.01, y = 0.005, label = "r = 0.054, p < 0.05") +
+  theme(axis.title=element_text(size=16, face="bold",),
+        axis.text=element_text(size=14, colour="black"),
+        legend.position = "none")
+
+#ggsave("/Users/liusuyuan/Documents/1_School/1_UBC/2_2021Spring/MFA_project/manuscript/plots/displacement_cor.png", width = 8, height = 5)
+```
+
